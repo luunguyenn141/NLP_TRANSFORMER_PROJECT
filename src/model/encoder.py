@@ -1,85 +1,80 @@
-import os
-import sys
 import torch
 import torch.nn as nn
-import math
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, "../../"))
-sys.path.append(project_root)
-
-from configs.config import cfg
-from src.model.attention import MultiHeadAttention
-from src.model.positional_encoding import PositionalEncoding
-
-class PositionwiseFeedForward(nn.Module):
-    "Mạng FFN (Feed Forward Network) [cite: 24]"
-    def __init__(self, d_model, d_ff, dropout=0.1):
-        super(PositionwiseFeedForward, self).__init__()
-        self.w_1 = nn.Linear(d_model, d_ff)
-        self.w_2 = nn.Linear(d_ff, d_model)
-        self.dropout = nn.Dropout(dropout)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        return self.w_2(self.dropout(self.relu(self.w_1(x))))
+from .attention import MultiHeadAttention
+from .positional_encoding import PositionalEncoding
 
 class EncoderLayer(nn.Module):
-    "Multi-Head Attention + Add & Norm + FFN"
-    def __init__(self, d_model, n_head, d_ff, dropout):
-        super(EncoderLayer, self).__init__()
-        self.self_attn = MultiHeadAttention(d_model, n_head)
-        self.ffn = PositionwiseFeedForward(d_model, d_ff, dropout)
+    def __init__(self, d_model, n_heads, d_ff, dropout):
+        super().__init__()
         
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        # 1. Multi-Head Self Attention
+        self.self_attn = MultiHeadAttention(d_model, n_heads)
+        self.self_attn_norm = nn.LayerNorm(d_model)
+        
+        # 2. Feed Forward Network
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model)
+        )
+        self.ffn_norm = nn.LayerNorm(d_model)
+        
         self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x, mask=None):
-        # 1. Sub-layer 1: Self-Attention
-        _x = x
-        x = self.norm1(x + self.dropout(self.self_attn(x, x, x, mask)))
         
-        # 2. Sub-layer 2: Feed Forward
-        x = self.norm2(x + self.dropout(self.ffn(x)))
-        return x
+    def forward(self, src, src_mask):
+        # src: [batch_size, src_len, d_model]
+        # src_mask: [batch_size, 1, 1, src_len]
+        
+        # Apply Self Attention
+        # _src là kết quả attention, _ là attention weights (không dùng ở đây)
+        _src, _ = self.self_attn(src, src, src, src_mask)
+        
+        # Dropout + Add + Norm (Residual Connection)
+        src = self.self_attn_norm(src + self.dropout(_src))
+        
+        # Apply Feed Forward
+        _src = self.ffn(src)
+        
+        # Dropout + Add + Norm
+        src = self.ffn_norm(src + self.dropout(_src))
+        
+        return src
 
 class Encoder(nn.Module):
-    "Encoder Tổng: Chồng N lớp EncoderLayer lại với nhau"
-    def __init__(self):
-        super(Encoder, self).__init__()
-        self.d_model = cfg.d_model
-        self.embedding = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        self.pe = PositionalEncoding(cfg.d_model, cfg.max_seq_len, cfg.dropout)
+    # --- ĐÂY LÀ PHẦN BẠN ĐANG BỊ LỖI ---
+    # Phải khai báo đầy đủ tham số để khớp với Transformer
+    def __init__(self, input_dim, d_model, n_layers, n_heads, d_ff, dropout, max_len=5000):
+        super().__init__()
         
-        # Tạo danh sách các lớp EncoderLayer
+        self.d_model = d_model
+        
+        # Embedding Layer
+        self.embedding = nn.Embedding(input_dim, d_model)
+        
+        # Positional Encoding Layer
+        self.pos_encoding = PositionalEncoding(d_model, max_len, dropout)
+        
+        # Stack N lớp EncoderLayer
         self.layers = nn.ModuleList([
-            EncoderLayer(cfg.d_model, cfg.n_head, cfg.d_ff, cfg.dropout) 
-            for _ in range(cfg.n_layer)
+            EncoderLayer(d_model, n_heads, d_ff, dropout)
+            for _ in range(n_layers)
         ])
-        self.dropout = nn.Dropout(cfg.dropout)
-
-    def forward(self, src, src_mask=None):
-        # src shape: (batch_size, seq_len)
-        x = self.embedding(src) * math.sqrt(self.d_model)
-        x = self.pe(x)
-        x = self.dropout(x)
         
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, src, src_mask):
+        # src: [batch_size, src_len]
+        
+        # 1. Embedding + Scaling
+        # Trong paper gốc, họ nhân embedding với sqrt(d_model)
+        src = self.embedding(src) * (self.d_model ** 0.5)
+        
+        # 2. Cộng Positional Encoding
+        src = self.pos_encoding(src)
+        
+        # 3. Qua các lớp Encoder Layers
         for layer in self.layers:
-            x = layer(x, src_mask)
-        return x
-
-# --- PHẦN TEST (CHẠY THỬ) ---
-if __name__ == "__main__":
-    try:
-        # Giả lập input (Batch=2, Câu dài 10 từ)
-        src = torch.randint(0, 100, (2, 10))
-        model = Encoder()
-        out = model(src)
-        print("✅ Input shape:", src.shape)
-        print("✅ Encoder Output:", out.shape)
-        
-        if out.shape == (2, 10, 512):
-            print("DONE")
-    except Exception as e:
-        print("ERROR:", e)
+            src = layer(src, src_mask)
+            
+        return src
