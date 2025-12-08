@@ -53,6 +53,15 @@ class Vocabulary:
 
     def token_to_id(self, token):
         return self.stoi.get(token, self.stoi["<unk>"])
+    
+    # Backwards-compatible alias expected by some scripts
+    def to_index(self, token):
+        """Alias for token_to_id kept for backwards compatibility."""
+        return self.token_to_id(token)
+    
+    def to_token(self, idx):
+        """Alias for id_to_token kept for backwards compatibility."""
+        return self.id_to_token(idx)
 
     def id_to_token(self, idx):
         if idx < 0 or idx >= len(self.itos):

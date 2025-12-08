@@ -65,7 +65,9 @@ class MultiHeadAttention(nn.Module):
         output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
 
         # --- BƯỚC 6: QUA LỚP LINEAR CUỐI ---
-        return self.w_o(output)
+        # Trả về cả output và attention weights để các lớp Encoder/Decoder
+        # có thể (tuỳ chọn) truy cập attention maps.
+        return self.w_o(output), attn_weights
 
 # ==========================================
 # (UNIT TEST)
@@ -86,10 +88,11 @@ if __name__ == "__main__":
         attention = MultiHeadAttention(d_model, n_head)
         
         # Chạy thử
-        output = attention(x, x, x) # Self-attention
+        output, attn = attention(x, x, x) # Self-attention
         
         print(f"✅ Input size: {x.shape}")
         print(f"✅ Output size: {output.shape}")
+        print(f"✅ Attn size: {attn.shape}")
         
         if output.shape == (batch_size, seq_len, d_model):
             print("DONE")

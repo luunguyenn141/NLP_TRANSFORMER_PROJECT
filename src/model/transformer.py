@@ -16,7 +16,7 @@ class Transformer(nn.Module):
         self.src_pad_idx = src_pad_idx
         self.trg_pad_idx = trg_pad_idx
         
-        # Khởi tạo trọng số Xavier (Quan trọng để hội tụ)
+        # Khởi tạo trọng số Xavier 
         self._init_weights()
 
     def _init_weights(self):
