@@ -191,7 +191,25 @@ def main():
 
     best_valid_loss = float('inf')
 
-    print("\n🏁 BẮT ĐẦU VÒNG LẶP HUẤN LUYỆN")
+
+    checkpoint_path = os.path.join(CHECKPOINT_DIR, 'best_model.pth')
+    
+    start_epoch = 0 # Mặc định bắt đầu từ 0
+    
+    if os.path.exists(checkpoint_path):
+        print(f"Đang nạp lại checkpoint từ: {checkpoint_path}")
+        try:
+            # Load trọng số vào model
+            state_dict = torch.load(checkpoint_path, map_location=device)
+            model.load_state_dict(state_dict)
+            print("Đã khôi phục trạng thái mô hình thành công! Tiếp tục train...")
+            
+        except Exception as e:
+            print(f"Lỗi khi load checkpoint: {e}")
+            print("Sẽ train lại từ đầu.")
+    else:
+        print("Không tìm thấy checkpoint cũ. Bắt đầu huấn luyện từ đầu.")
+    print("\nBẮT ĐẦU VÒNG LẶP HUẤN LUYỆN")
     for epoch in range(cfg.num_epochs):
         start_time = time.time()
 
@@ -208,7 +226,7 @@ def main():
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
             torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'best_model.pth'))
-            print("\t--> 💾 Đã lưu Best Model!")
+            print("\t--> Đã lưu Best Model!")
 
         torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'last_model.pth'))
 
