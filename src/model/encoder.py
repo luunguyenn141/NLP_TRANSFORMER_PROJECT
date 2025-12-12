@@ -23,39 +23,34 @@ class EncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
     def forward(self, src, src_mask):
-        # src: [batch_size, src_len, d_model]
-        # src_mask: [batch_size, 1, 1, src_len]
+        # --- PRE-NORM CHANGE ---
         
-        # Apply Self Attention
-        # _src là kết quả attention, _ là attention weights (không dùng ở đây)
-        _src, _ = self.self_attn(src, src, src, src_mask)
+        # 1. Self Attention Block
+        # B1: Norm trước
+        src_norm = self.self_attn_norm(src) 
+        # B2: Tính Attention trên input đã norm
+        _src, _ = self.self_attn(src_norm, src_norm, src_norm, src_mask)
+        # B3: Residual Add vào input gốc (chưa norm)
+        src = src + self.dropout(_src)
         
-        # Dropout + Add + Norm (Residual Connection)
-        src = self.self_attn_norm(src + self.dropout(_src))
-        
-        # Apply Feed Forward
-        _src = self.ffn(src)
-        
-        # Dropout + Add + Norm
-        src = self.ffn_norm(src + self.dropout(_src))
+        # 2. FFN Block
+        # B1: Norm trước
+        src_norm = self.ffn_norm(src)
+        # B2: Tính FFN
+        _src = self.ffn(src_norm)
+        # B3: Residual Add
+        src = src + self.dropout(_src)
         
         return src
 
 class Encoder(nn.Module):
-    # --- ĐÂY LÀ PHẦN BẠN ĐANG BỊ LỖI ---
-    # Phải khai báo đầy đủ tham số để khớp với Transformer
     def __init__(self, input_dim, d_model, n_layers, n_heads, d_ff, dropout, max_len=5000):
         super().__init__()
         
         self.d_model = d_model
-        
-        # Embedding Layer
         self.embedding = nn.Embedding(input_dim, d_model)
-        
-        # Positional Encoding Layer
         self.pos_encoding = PositionalEncoding(d_model, max_len, dropout)
         
-        # Stack N lớp EncoderLayer
         self.layers = nn.ModuleList([
             EncoderLayer(d_model, n_heads, d_ff, dropout)
             for _ in range(n_layers)
@@ -63,18 +58,17 @@ class Encoder(nn.Module):
         
         self.dropout = nn.Dropout(dropout)
         
+        # --- PRE-NORM CHANGE: Thêm lớp Norm cuối cùng ---
+        self.final_norm = nn.LayerNorm(d_model) 
+        
     def forward(self, src, src_mask):
-        # src: [batch_size, src_len]
-        
-        # 1. Embedding + Scaling
-        # Trong paper gốc, họ nhân embedding với sqrt(d_model)
         src = self.embedding(src) * (self.d_model ** 0.5)
-        
-        # 2. Cộng Positional Encoding
         src = self.pos_encoding(src)
         
-        # 3. Qua các lớp Encoder Layers
-        for layer in self.layers:
+        for layer in self.layers:   
             src = layer(src, src_mask)
             
+        # --- PRE-NORM CHANGE: Norm output cuối cùng ---
+        src = self.final_norm(src)
+        
         return src

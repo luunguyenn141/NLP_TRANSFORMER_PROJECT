@@ -5,19 +5,19 @@ class Config:
     src_lang = 'vi'
     tgt_lang = 'en'
     max_seq_len = 100    
-    vocab_size = 30000   # Sẽ được B cập nhật sau
+    vocab_size = 30000   
     
     # 2. Tham số Model
-    d_model = 512        # Kích thước Embedding và Model
-    n_head = 8           # Số lượng đầu Attention
-    n_layer = 6          # Số lớp Encoder/Decoder
-    d_ff = 2048          # Kích thước lớp ẩn trong FFN
+    d_model = 512        
+    n_head = 8           
+    n_layer = 3          # Giữ nguyên 3 là tốt cho 130k data
+    d_ff = 2048          
     dropout = 0.1        
     
     # 3. Tham số Huấn luyện
-    batch_size = 32
-    lr = 0.0001
-    num_epochs = 20
+    batch_size = 64      # <-- TĂNG LÊN (Quan trọng nhất)
+    lr = 0.0001          # Nếu dùng NoamOpt, tham số này có thể không quan trọng lắm
+    num_epochs = 20      # <-- Tăng lên để đảm bảo mô hình học đủ sâu
     
     # Thiết bị
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

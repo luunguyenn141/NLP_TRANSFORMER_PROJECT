@@ -101,10 +101,24 @@ def main():
         max_len=cfg.max_seq_len
     ).to(DEVICE)
     
-    # 3. Load Checkpoint
+    # 3. Load Checkpoint (use non-strict load to tolerate small architecture changes)
     if os.path.exists(CHECKPOINT_PATH):
         print(f"Loading checkpoint: {CHECKPOINT_PATH}")
-        model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
+        ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+        load_res = model.load_state_dict(ckpt, strict=False)
+        print(f"✅ Đã load model từ {CHECKPOINT_PATH}")
+        # Print missing/unexpected keys to aid debugging
+        try:
+            missing = load_res.missing_keys if hasattr(load_res, 'missing_keys') else load_res.get('missing_keys')
+            unexpected = load_res.unexpected_keys if hasattr(load_res, 'unexpected_keys') else load_res.get('unexpected_keys')
+        except Exception:
+            missing = None
+            unexpected = None
+
+        if missing:
+            print(f"⚠️ Missing keys in checkpoint (initialized randomly): {missing}")
+        if unexpected:
+            print(f"⚠️ Unexpected keys found in checkpoint (ignored): {unexpected}")
     else:
         print(f"Không tìm thấy checkpoint tại {CHECKPOINT_PATH}")
         return

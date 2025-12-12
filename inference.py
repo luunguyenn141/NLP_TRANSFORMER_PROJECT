@@ -88,8 +88,17 @@ def load_resources():
     ).to(DEVICE)
     
     if os.path.exists(CHECKPOINT_PATH):
-        model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
+        ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+        # Try to load state dict permissively to support older checkpoints
+        load_res = model.load_state_dict(ckpt, strict=False)
+        # Report any missing / unexpected keys to help debugging
+        missing = load_res.missing_keys if hasattr(load_res, 'missing_keys') else load_res.get('missing_keys')
+        unexpected = load_res.unexpected_keys if hasattr(load_res, 'unexpected_keys') else load_res.get('unexpected_keys')
         print(f"✅ Đã load model từ {CHECKPOINT_PATH}")
+        if missing:
+            print(f"⚠️ Missing keys in checkpoint (model had these keys but checkpoint did not): {missing}")
+        if unexpected:
+            print(f"⚠️ Unexpected keys in checkpoint (checkpoint had these keys not used by model): {unexpected}")
     else:
         print(f"❌ CẢNH BÁO: Không tìm thấy {CHECKPOINT_PATH}. Model chưa được huấn luyện!")
     
@@ -116,7 +125,7 @@ def translate_input(sentence, model, src_vocab, tgt_vocab, tokenizer, device):
         start_symbol=sos_idx, 
         end_symbol=eos_idx, 
         device=device,
-        beam_width=3 # Bạn có thể chỉnh beam_width tại đây
+        beam_width=5 # Bạn có thể chỉnh beam_width tại đây
     )
     
     # 5. Convert Indices to Text

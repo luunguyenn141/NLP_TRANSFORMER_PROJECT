@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+import matplotlib.pyplot as plt
+
 # Ensure project root is on `sys.path` so imports like `configs` and `src` resolve
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
@@ -33,7 +35,7 @@ class NoamOpt:
     Learning rate scheduler with warmup (Transformer style).
     lr = d_model^(-0.5) * min(step^(-0.5), step * warmup^(-1.5))
     """
-    def __init__(self, optimizer, d_model, warmup_steps=4000, factor=1):
+    def __init__(self, optimizer, d_model, warmup_steps=2000, factor=2):
         self.optimizer = optimizer
         self._step = 0
         self.warmup_steps = warmup_steps
@@ -79,7 +81,13 @@ def load_data(src_vocab, tgt_vocab, data_type):
     with open(vi_path, "r", encoding="utf-8") as f:
         tgt_data = [line.split() for line in f]
 
-    dataset = TranslationDataset(src_data, tgt_data, src_vocab, tgt_vocab)
+    dataset = TranslationDataset(
+        src_data,
+        tgt_data,
+        src_vocab,
+        tgt_vocab,
+        max_len=cfg.max_seq_len
+        )
 
     shuffle = True if data_type == "train" else False
     dataloader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=shuffle,
@@ -92,14 +100,32 @@ def train_epoch(model, iterator, optimizer, criterion, device):
     epoch_loss = 0
 
     for i, batch in enumerate(iterator):
+        # Support multiple batch formats for backward compatibility:
+        # - dict with keys 'src' and 'tgt' (old)
+        # - dict with keys 'src', 'trg_input', 'trg_label' (new)
+        # - tuple/list (src, tgt)
         if isinstance(batch, dict):
-            src = batch['src'].to(device)
-            trg = batch['tgt'].to(device)
+            src = batch.get('src')
+            # prefer explicit trg_input/label if provided by dataset
+            if 'trg_input' in batch and 'trg_label' in batch:
+                trg_input = batch['trg_input']
+                trg_label = batch['trg_label']
+                src = src.to(device)
+                trg_input = trg_input.to(device)
+                trg_label = trg_label.to(device)
+            else:
+                # fall back to legacy single target tensor 'tgt'
+                trg = batch.get('tgt') or batch.get('trg')
+                if trg is None:
+                    raise KeyError("Batch dict does not contain 'tgt' or 'trg_input'/'trg_label' keys")
+                src = src.to(device)
+                trg = trg.to(device)
+                trg_input = trg[:, :-1]
+                trg_label = trg[:, 1:]
         else:
             src, trg = batch[0].to(device), batch[1].to(device)
-
-        trg_input = trg[:, :-1]
-        trg_label = trg[:, 1:]
+            trg_input = trg[:, :-1]
+            trg_label = trg[:, 1:]
 
         optimizer.zero_grad()
 
@@ -116,7 +142,7 @@ def train_epoch(model, iterator, optimizer, criterion, device):
 
         epoch_loss += loss.item()
 
-        if i % 50 == 0:
+        if i % 100 == 0:
             try:
                 current_lr = optimizer.optimizer.param_groups[0]['lr']
             except Exception:
@@ -136,14 +162,27 @@ def evaluate(model, iterator, criterion, device):
 
     with torch.no_grad():
         for i, batch in enumerate(iterator):
+            # Support multiple batch formats for backward compatibility
             if isinstance(batch, dict):
-                src = batch['src'].to(device)
-                trg = batch['tgt'].to(device)
+                src = batch.get('src')
+                if 'trg_input' in batch and 'trg_label' in batch:
+                    trg_input = batch['trg_input']
+                    trg_label = batch['trg_label']
+                    src = src.to(device)
+                    trg_input = trg_input.to(device)
+                    trg_label = trg_label.to(device)
+                else:
+                    trg = batch.get('tgt') or batch.get('trg')
+                    if trg is None:
+                        raise KeyError("Batch dict does not contain 'tgt' or 'trg_input'/'trg_label' keys")
+                    src = src.to(device)
+                    trg = trg.to(device)
+                    trg_input = trg[:, :-1]
+                    trg_label = trg[:, 1:]
             else:
                 src, trg = batch[0].to(device), batch[1].to(device)
-
-            trg_input = trg[:, :-1]
-            trg_label = trg[:, 1:]
+                trg_input = trg[:, :-1]
+                trg_label = trg[:, 1:]
 
             output = model(src, trg_input)
             output_dim = output.shape[-1]
@@ -185,7 +224,7 @@ def main():
     ).to(device)
 
     base_optimizer = optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9)
-    model_opt = NoamOpt(base_optimizer, cfg.d_model, warmup_steps=4000, factor=1)
+    model_opt = NoamOpt(base_optimizer, cfg.d_model, warmup_steps=2000, factor=2)
 
     criterion = nn.CrossEntropyLoss(ignore_index=trg_pad_idx, label_smoothing=0.1)
 
@@ -209,12 +248,21 @@ def main():
             print("Sẽ train lại từ đầu.")
     else:
         print("Không tìm thấy checkpoint cũ. Bắt đầu huấn luyện từ đầu.")
+        
+    
+    train_losses = []
+    valid_losses = []
+    
     print("\nBẮT ĐẦU VÒNG LẶP HUẤN LUYỆN")
     for epoch in range(cfg.num_epochs):
         start_time = time.time()
 
         train_loss = train_epoch(model, train_loader, model_opt, criterion, device)
         valid_loss = evaluate(model, valid_loader, criterion, device)
+        
+        # --- LƯU HISTORY ---
+        train_losses.append(train_loss)
+        valid_losses.append(valid_loss)
 
         end_time = time.time()
         mins, secs = divmod(end_time - start_time, 60)
@@ -230,6 +278,16 @@ def main():
 
         torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'last_model.pth'))
 
+    # Vẽ biểu đồ loss
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(valid_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss over Epochs')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 if __name__ == "__main__":
     main()

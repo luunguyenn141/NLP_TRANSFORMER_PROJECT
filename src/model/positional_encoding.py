@@ -22,6 +22,23 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x):
         # x: (batch_size, seq_len, d_model)
+        # Ensure the positional encoding buffer is large enough for x
+        seq_len = x.size(1)
+        # self.pe shape: (1, max_len, d_model)
+        if seq_len > self.pe.size(1):
+            # Recreate positional encodings with the larger length on the same device
+            max_len = seq_len
+            d_model = self.pe.size(2)
+            pe = torch.zeros(max_len, d_model, device=x.device)
+            position = torch.arange(0, max_len, dtype=torch.float, device=x.device).unsqueeze(1)
+            div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float, device=x.device) *
+                                 (-math.log(10000.0) / d_model))
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+            pe = pe.unsqueeze(0)
+            # Replace the buffer (keep name 'pe' for consistency)
+            self.register_buffer('pe', pe)
+
         # Cộng Embedding của từ với Positional Encoding
-        x = x + self.pe[:, :x.size(1)]
+        x = x + self.pe[:, :seq_len]
         return self.dropout(x)

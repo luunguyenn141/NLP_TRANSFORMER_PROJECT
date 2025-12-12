@@ -120,7 +120,8 @@ def step4_build_dataset(src_vocab, tgt_vocab):
     print("Dataset size:", len(dataset))
     print("Batch example:")
     batch = next(iter(dataloader))
-    print(batch["src"].shape, batch["tgt"].shape)
+    # batch contains 'src', 'trg_input', 'trg_label'
+    print(batch["src"].shape, batch["trg_input"].shape, batch["trg_label"].shape)
 
     return dataset, dataloader
 

@@ -51,7 +51,14 @@ class MultiHeadAttention(nn.Module):
         # Nếu có mask, ta gán giá trị tại vị trí mask=0 thành âm vô cùng (-1e9)
         # Để khi qua Softmax nó sẽ bằng 0 (nghĩa là không thèm nhìn vào từ đó)
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
+            # Use a dtype-appropriate large negative value for masked positions.
+            # For float32/64 a large negative like -1e9 is fine; for float16
+            # that can overflow or be too large, so use a smaller magnitude.
+            if scores.dtype == torch.float16:
+                fill = torch.tensor(-1e4, device=scores.device, dtype=scores.dtype)
+            else:
+                fill = torch.tensor(-1e9, device=scores.device, dtype=scores.dtype)
+            scores = scores.masked_fill(mask == 0, fill)
 
         # --- BƯỚC 4: SOFTMAX VÀ NHÂN VỚI V ---
         attn_weights = torch.softmax(scores, dim=-1)
