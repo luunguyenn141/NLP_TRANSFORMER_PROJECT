@@ -17,6 +17,9 @@ class Transformer(nn.Module):
         self.trg_pad_idx = trg_pad_idx
         
         # Khởi tạo trọng số Xavier 
+        if hasattr(self.decoder, 'embedding') and hasattr(self.decoder, 'fc_out'):
+            self.decoder.fc_out.weight = self.decoder.embedding.weight
+        
         self._init_weights()
 
     def _init_weights(self):

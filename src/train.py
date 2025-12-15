@@ -28,14 +28,61 @@ CHECKPOINT_DIR = "checkpoints"
 
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
+# --- 1. CLASS EARLY STOPPING (MỚI) ---
+class EarlyStopping:
+    """
+    Dừng training sớm nếu validation loss không cải thiện sau một số epoch nhất định (patience).
+    """
+    def __init__(self, patience=3, verbose=False, delta=0, path='checkpoint.pth', trace_func=print):
+        """
+        Args:
+            patience (int): Số epoch chờ đợi sau khi loss không cải thiện.
+            verbose (bool): Nếu True, in ra thông báo mỗi khi validation loss cải thiện.
+            delta (float): Thay đổi tối thiểu để được coi là cải thiện.
+            path (str): Đường dẫn lưu checkpoint model tốt nhất.
+            trace_func (function): Hàm dùng để in thông báo.
+        """
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.val_loss_min = float('inf')
+        self.delta = delta
+        self.path = path
+        self.trace_func = trace_func
 
-# --- 1. SCHEDULER (Noam) ---
+    def __call__(self, val_loss, model):
+        score = -val_loss
+
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            self.trace_func(f'Validation loss không giảm. EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+            self.counter = 0
+
+    def save_checkpoint(self, val_loss, model):
+        '''Lưu model khi validation loss giảm.'''
+        if self.verbose:
+            self.trace_func(f'Validation loss giảm ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Đang lưu model...')
+        torch.save(model.state_dict(), self.path)
+        self.val_loss_min = val_loss
+
+
+# --- 2. SCHEDULER (Noam) ---
 class NoamOpt:
     """
     Learning rate scheduler with warmup (Transformer style).
     lr = d_model^(-0.5) * min(step^(-0.5), step * warmup^(-1.5))
     """
-    def __init__(self, optimizer, d_model, warmup_steps=2000, factor=2):
+    def __init__(self, optimizer, d_model, warmup_steps=4000, factor=2):
         self.optimizer = optimizer
         self._step = 0
         self.warmup_steps = warmup_steps
@@ -61,7 +108,7 @@ class NoamOpt:
         self.optimizer.zero_grad()
 
 
-# --- 2. Helpers ---
+# --- 3. Helpers ---
 def load_vocab():
     print("⏳ Đang tải bộ từ điển...")
     src_vocab = Vocabulary()
@@ -100,13 +147,8 @@ def train_epoch(model, iterator, optimizer, criterion, device):
     epoch_loss = 0
 
     for i, batch in enumerate(iterator):
-        # Support multiple batch formats for backward compatibility:
-        # - dict with keys 'src' and 'tgt' (old)
-        # - dict with keys 'src', 'trg_input', 'trg_label' (new)
-        # - tuple/list (src, tgt)
         if isinstance(batch, dict):
             src = batch.get('src')
-            # prefer explicit trg_input/label if provided by dataset
             if 'trg_input' in batch and 'trg_label' in batch:
                 trg_input = batch['trg_input']
                 trg_label = batch['trg_label']
@@ -114,7 +156,6 @@ def train_epoch(model, iterator, optimizer, criterion, device):
                 trg_input = trg_input.to(device)
                 trg_label = trg_label.to(device)
             else:
-                # fall back to legacy single target tensor 'tgt'
                 trg = batch.get('tgt') or batch.get('trg')
                 if trg is None:
                     raise KeyError("Batch dict does not contain 'tgt' or 'trg_input'/'trg_label' keys")
@@ -146,7 +187,6 @@ def train_epoch(model, iterator, optimizer, criterion, device):
             try:
                 current_lr = optimizer.optimizer.param_groups[0]['lr']
             except Exception:
-                # fallback if optimizer is a plain torch optimizer
                 try:
                     current_lr = optimizer.param_groups[0]['lr']
                 except Exception:
@@ -162,7 +202,6 @@ def evaluate(model, iterator, criterion, device):
 
     with torch.no_grad():
         for i, batch in enumerate(iterator):
-            # Support multiple batch formats for backward compatibility
             if isinstance(batch, dict):
                 src = batch.get('src')
                 if 'trg_input' in batch and 'trg_label' in batch:
@@ -194,7 +233,7 @@ def evaluate(model, iterator, criterion, device):
     return epoch_loss / len(iterator)
 
 
-# --- 3. MAIN ---
+# --- 4. MAIN ---
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 Bắt đầu huấn luyện trên thiết bị: {device}")
@@ -228,21 +267,18 @@ def main():
 
     criterion = nn.CrossEntropyLoss(ignore_index=trg_pad_idx, label_smoothing=0.1)
 
-    best_valid_loss = float('inf')
-
-
-    checkpoint_path = os.path.join(CHECKPOINT_DIR, 'best_model.pth')
+    # --- Cấu hình Early Stopping ---
+    best_model_path = os.path.join(CHECKPOINT_DIR, 'best_model.pth')
+    # patience=3: Dừng nếu sau 3 epoch validation loss không giảm
+    early_stopping = EarlyStopping(patience=3, verbose=True, path=best_model_path)
     
-    start_epoch = 0 # Mặc định bắt đầu từ 0
-    
-    if os.path.exists(checkpoint_path):
-        print(f"Đang nạp lại checkpoint từ: {checkpoint_path}")
+    # Kiểm tra checkpoint cũ
+    if os.path.exists(best_model_path):
+        print(f"Đang nạp lại checkpoint từ: {best_model_path}")
         try:
-            # Load trọng số vào model
-            state_dict = torch.load(checkpoint_path, map_location=device)
+            state_dict = torch.load(best_model_path, map_location=device)
             model.load_state_dict(state_dict)
             print("Đã khôi phục trạng thái mô hình thành công! Tiếp tục train...")
-            
         except Exception as e:
             print(f"Lỗi khi load checkpoint: {e}")
             print("Sẽ train lại từ đầu.")
@@ -250,8 +286,11 @@ def main():
         print("Không tìm thấy checkpoint cũ. Bắt đầu huấn luyện từ đầu.")
         
     
+    # Lists để lưu lịch sử cho biểu đồ
     train_losses = []
     valid_losses = []
+    train_ppls = []
+    valid_ppls = []
     
     print("\nBẮT ĐẦU VÒNG LẶP HUẤN LUYỆN")
     for epoch in range(cfg.num_epochs):
@@ -260,34 +299,61 @@ def main():
         train_loss = train_epoch(model, train_loader, model_opt, criterion, device)
         valid_loss = evaluate(model, valid_loader, criterion, device)
         
+        # Tính Perplexity (PPL) = exp(loss)
+        train_ppl = math.exp(train_loss)
+        valid_ppl = math.exp(valid_loss)
+
         # --- LƯU HISTORY ---
         train_losses.append(train_loss)
         valid_losses.append(valid_loss)
+        train_ppls.append(train_ppl)
+        valid_ppls.append(valid_ppl)
 
         end_time = time.time()
         mins, secs = divmod(end_time - start_time, 60)
 
         print(f'Epoch: {epoch+1:02} | Time: {int(mins)}m {int(secs)}s')
-        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
-        print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {math.exp(valid_loss):7.3f}')
+        print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {train_ppl:7.3f}')
+        print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {valid_ppl:7.3f}')
 
-        if valid_loss < best_valid_loss:
-            best_valid_loss = valid_loss
-            torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'best_model.pth'))
-            print("\t--> Đã lưu Best Model!")
+        # --- GỌI EARLY STOPPING ---
+        # EarlyStopping sẽ tự động lưu model nếu validation loss giảm
+        early_stopping(valid_loss, model)
+        
+        if early_stopping.early_stop:
+            print("⛔ Early stopping triggered! Dừng huấn luyện do validation loss không giảm sau 3 epochs.")
+            break
 
+        # Lưu checkpoint cuối cùng (đề phòng)
         torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'last_model.pth'))
 
-    # Vẽ biểu đồ loss
-    plt.figure(figsize=(10, 5))
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(valid_losses, label='Validation Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Training and Validation Loss over Epochs')
-    plt.legend()
-    plt.grid(True)
+    # --- VẼ BIỂU ĐỒ (LOSS & PPL) ---
+    print("Đang vẽ biểu đồ huấn luyện...")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+
+    # Biểu đồ 1: Loss
+    ax1.plot(train_losses, label='Train Loss', color='blue')
+    ax1.plot(valid_losses, label='Validation Loss', color='orange')
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Loss over Epochs')
+    ax1.legend()
+    ax1.grid(True)
+
+    # Biểu đồ 2: Perplexity
+    ax2.plot(train_ppls, label='Train PPL', color='green')
+    ax2.plot(valid_ppls, label='Validation PPL', color='red')
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Perplexity')
+    ax2.set_title('Perplexity over Epochs')
+    ax2.legend()
+    ax2.grid(True)
+
+    plt.tight_layout()
+    # Lưu biểu đồ thành file ảnh thay vì chỉ show (tiện xem lại)
+    plt.savefig(os.path.join(CHECKPOINT_DIR, 'training_metrics.png'))
     plt.show()
+    print(f"Đã lưu biểu đồ tại: {os.path.join(CHECKPOINT_DIR, 'training_metrics.png')}")
 
 if __name__ == "__main__":
     main()
