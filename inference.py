@@ -12,14 +12,13 @@ if project_root not in sys.path:
 from configs.config import cfg
 from src.model.transformer import Transformer
 from src.data.data_processing.vocabulary import Vocabulary
-from src.data.data_processing.tokenizer import SimpleTokenizer
 
 # --- CẤU HÌNH ---
 VOCAB_DIR = "src/data/vocab"
-CHECKPOINT_PATH = "checkpoints/best_model.pth" # Đường dẫn model tốt nhất
+CHECKPOINT_PATH = "checkpoints/best_model.pth"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- HÀM BEAM SEARCH (Đưa vào đây để tiện chạy độc lập) ---
+# --- HÀM BEAM SEARCH ---
 def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, device, beam_width=3):
     model.eval()
     with torch.no_grad():
@@ -58,19 +57,28 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
 
 # --- HÀM XỬ LÝ CHÍNH ---
 def load_resources():
+    """Load model, vocabulary, and tokenizer"""
     print("⏳ Đang tải tài nguyên (Vocab, Model)...")
     
-    # 1. Load Vocab
+    # 1. Load Vocab (ưu tiên BPE)
     src_vocab = Vocabulary()
     tgt_vocab = Vocabulary()
-    # Đường dẫn file json dựa trên cấu trúc thư mục bạn đã upload
-    src_vocab.load(os.path.join(VOCAB_DIR, "src_vocab.json")) #
-    tgt_vocab.load(os.path.join(VOCAB_DIR, "tgt_vocab.json")) #
     
-    # 2. Load Tokenizer
-    tokenizer = SimpleTokenizer() #
+    # Check for BPE vocab
+    src_bpe_path = os.path.join(VOCAB_DIR, "src_vocab_bpe.json")
+    tgt_bpe_path = os.path.join(VOCAB_DIR, "tgt_vocab_bpe.json")
     
-    # 3. Load Model
+    if os.path.exists(src_bpe_path) and os.path.exists(tgt_bpe_path):
+        print("   Sử dụng BPE vocabularies")
+        src_vocab.load(src_bpe_path)
+        tgt_vocab.load(tgt_bpe_path)
+    else:
+        # Fallback to word-level
+        print("   Sử dụng word-level vocabularies")
+        src_vocab.load(os.path.join(VOCAB_DIR, "src_vocab.json"))
+        tgt_vocab.load(os.path.join(VOCAB_DIR, "tgt_vocab.json"))
+    
+    # 2. Load Model
     src_pad_idx = src_vocab.to_index('<pad>')
     trg_pad_idx = tgt_vocab.to_index('<pad>')
     
@@ -79,90 +87,178 @@ def load_resources():
         trg_vocab_size=len(tgt_vocab),
         src_pad_idx=src_pad_idx,
         trg_pad_idx=trg_pad_idx,
-        d_model=cfg.d_model,     #
-        n_layers=cfg.n_layer,    #
-        n_heads=cfg.n_head,      #
-        d_ff=cfg.d_ff,           #
-        dropout=cfg.dropout,     #
-        max_len=cfg.max_seq_len  #
+        d_model=cfg.d_model,
+        n_layers=cfg.n_layer,
+        n_heads=cfg.n_head,
+        d_ff=cfg.d_ff,
+        dropout=cfg.dropout,
+        max_len=cfg.max_seq_len
     ).to(DEVICE)
     
+    # 3. Load checkpoint
     if os.path.exists(CHECKPOINT_PATH):
-        ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
-        # Try to load state dict permissively to support older checkpoints
-        load_res = model.load_state_dict(ckpt, strict=False)
-        # Report any missing / unexpected keys to help debugging
-        missing = load_res.missing_keys if hasattr(load_res, 'missing_keys') else load_res.get('missing_keys')
-        unexpected = load_res.unexpected_keys if hasattr(load_res, 'unexpected_keys') else load_res.get('unexpected_keys')
-        print(f"✅ Đã load model từ {CHECKPOINT_PATH}")
-        if missing:
-            print(f"⚠️ Missing keys in checkpoint (model had these keys but checkpoint did not): {missing}")
-        if unexpected:
-            print(f"⚠️ Unexpected keys in checkpoint (checkpoint had these keys not used by model): {unexpected}")
+        try:
+            ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
+            load_res = model.load_state_dict(ckpt, strict=False)
+            print(f"✅ Đã load model từ {CHECKPOINT_PATH}")
+            
+            # Print warnings
+            if hasattr(load_res, 'missing_keys'):
+                if load_res.missing_keys:
+                    print(f"⚠️  Missing keys: {load_res.missing_keys}")
+                if load_res.unexpected_keys:
+                    print(f"⚠️  Unexpected keys: {load_res.unexpected_keys}")
+        except Exception as e:
+            print(f"❌ Lỗi khi load model: {e}")
+            return None, None, None, None
     else:
-        print(f"❌ CẢNH BÁO: Không tìm thấy {CHECKPOINT_PATH}. Model chưa được huấn luyện!")
+        print(f"❌ Không tìm thấy checkpoint tại {CHECKPOINT_PATH}")
+        return None, None, None, None
     
-    return model, src_vocab, tgt_vocab, tokenizer
+    model.eval()
+    print("✅ Model đã sẵn sàng cho inference")
+    
+    return model, src_vocab, tgt_vocab
 
-def translate_input(sentence, model, src_vocab, tgt_vocab, tokenizer, device):
-    # 1. Tokenize & Preprocess
-    tokens = tokenizer.tokenize(sentence)
+def preprocess_text(text, is_vietnamese=True):
+    """Simple text preprocessing"""
+    text = text.lower().strip()
+    # Remove extra spaces
+    text = re.sub(r'\s+', ' ', text)
+    return text
+
+def tokenize_for_inference(text, vocab, is_vietnamese=True):
+    """Tokenize text for inference"""
+    # Preprocess
+    text = preprocess_text(text, is_vietnamese)
     
-    # 2. Convert to Indices
-    src_indices = [src_vocab.to_index(token) for token in tokens]
-    src_tensor = torch.LongTensor(src_indices).unsqueeze(0).to(device) # [1, seq_len]
+    # For BPE vocab: split by space (assuming text already BPE tokenized during training)
+    # For word-level vocab: split by space
+    tokens = text.split()
     
-    # 3. Create Mask
-    src_mask = model.make_src_mask(src_tensor) #
+    # If using BPE and token is not in vocab, try to handle it
+    if vocab.bpe_tokenizer is not None:
+        # Use BPE tokenizer if available
+        return vocab.bpe_tokenizer.tokenize(text)
     
-    # 4. Beam Search Decoding
-    sos_idx = tgt_vocab.to_index('<sos>')
-    eos_idx = tgt_vocab.to_index('<eos>')
-    
-    pred_indices = beam_search_decode(
-        model, src_tensor, src_mask, 
-        max_len=100, 
-        start_symbol=sos_idx, 
-        end_symbol=eos_idx, 
-        device=device,
-        beam_width=5 # Bạn có thể chỉnh beam_width tại đây
-    )
-    
-    # 5. Convert Indices to Text
-    pred_tokens = [tgt_vocab.to_token(idx) for idx in pred_indices if idx not in [sos_idx, eos_idx]]
-    translated_text = tokenizer.detokenize(pred_tokens) #
-    
-    return translated_text
+    return tokens
+
+def translate_input(sentence, model, src_vocab, tgt_vocab, device):
+    """Translate a sentence"""
+    try:
+        # Tokenize
+        tokens = tokenize_for_inference(sentence, src_vocab, is_vietnamese=False)
+        
+        if not tokens:
+            return "Lỗi: Không thể tokenize câu đầu vào"
+        
+        # Convert to indices
+        src_indices = [src_vocab.to_index(token) for token in tokens]
+        
+        # Filter out unknown tokens (optional)
+        src_indices = [idx for idx in src_indices if idx != src_vocab.unk_id]
+        
+        if not src_indices:
+            return "Lỗi: Tất cả tokens đều không biết"
+        
+        src_tensor = torch.LongTensor(src_indices).unsqueeze(0).to(device)
+        src_mask = model.make_src_mask(src_tensor)
+        
+        sos_idx = tgt_vocab.to_index('<sos>')
+        eos_idx = tgt_vocab.to_index('<eos>')
+        
+        # Perform beam search
+        pred_indices = beam_search_decode(
+            model, src_tensor, src_mask, 
+            max_len=cfg.max_seq_len,
+            start_symbol=sos_idx,
+            end_symbol=eos_idx,
+            device=device,
+            beam_width=5
+        )
+        
+        # Convert indices to tokens
+        pred_tokens = []
+        for idx in pred_indices:
+            if idx == sos_idx:
+                continue
+            if idx == eos_idx:
+                break
+            token = tgt_vocab.to_token(idx)
+            if token not in ['<pad>', '<unk>', '<sos>', '<eos>']:
+                pred_tokens.append(token)
+        
+        # Join tokens
+        if tgt_vocab.bpe_tokenizer is not None:
+            # Use BPE detokenizer
+            translated_text = tgt_vocab.bpe_tokenizer.detokenize(pred_tokens)
+        else:
+            # Simple join for word-level
+            translated_text = ' '.join(pred_tokens)
+        
+        # Post-processing
+        translated_text = translated_text.strip()
+        if translated_text and translated_text[-1] not in '.!?':
+            translated_text += '.'
+        
+        return translated_text
+        
+    except Exception as e:
+        return f"Lỗi khi dịch: {e}"
 
 # --- MAIN LOOP ---
 def main():
-    model, src_vocab, tgt_vocab, tokenizer = load_resources()
+    # Load resources
+    resources = load_resources()
+    if resources[0] is None:
+        return
     
-    print("\n" + "="*40)
-    print("🤖 DEMO DỊCH MÁY (BEAM SEARCH)")
-    print("Nhập 'q' hoặc 'quit' để thoát.")
-    print("="*40 + "\n")
+    model, src_vocab, tgt_vocab = resources
+    
+    print("\n" + "="*50)
+    print("🤖 DEMO DỊCH MÁY VIỆT-ANH")
+    print("Nhập câu tiếng Việt để dịch sang tiếng Anh")
+    print("Lệnh: 'q' hoặc 'quit' để thoát, 'beam N' để đổi beam width")
+    print("="*50 + "\n")
+    
+    beam_width = 5
     
     while True:
         try:
-            src_text = input("Mời nhập câu tiếng Anh: ")
+            src_text = input("📝 Câu tiếng Việt: ").strip()
+            
+            if not src_text:
+                continue
+            
+            # Check for commands
             if src_text.lower() in ['q', 'quit', 'exit']:
-                print("Tạm biệt!")
+                print("👋 Tạm biệt!")
                 break
             
-            if not src_text.strip():
+            if src_text.lower().startswith('beam '):
+                try:
+                    new_beam = int(src_text.split()[1])
+                    if 1 <= new_beam <= 10:
+                        beam_width = new_beam
+                        print(f"✅ Đã đổi beam width thành {beam_width}")
+                    else:
+                        print("⚠️ Beam width phải từ 1 đến 10")
+                except:
+                    print("⚠️ Lệnh: beam N (N từ 1-10)")
                 continue
-                
-            translation = translate_input(src_text, model, src_vocab, tgt_vocab, tokenizer, DEVICE)
             
-            print(f"-> Bản dịch tiếng Việt: {translation}")
-            print("-" * 30)
+            # Translate
+            print(f"🔍 Đang dịch (beam={beam_width})...")
+            translation = translate_input(src_text, model, src_vocab, tgt_vocab, DEVICE)
+            
+            print(f"✅ Bản dịch tiếng Anh: {translation}")
+            print("-" * 50)
             
         except KeyboardInterrupt:
-            print("\nĐã dừng chương trình.")
+            print("\n\n👋 Đã dừng chương trình.")
             break
         except Exception as e:
-            print(f"Lỗi: {e}")
+            print(f"❌ Lỗi: {e}")
 
 if __name__ == "__main__":
     main()

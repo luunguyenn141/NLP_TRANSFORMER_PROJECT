@@ -3,10 +3,7 @@ from torch.utils.data import Dataset
 
 
 class TranslationDataset(Dataset):
-    """Bilingual dataset for Transformer.
-
-    Returns dicts with keys: 'src', 'trg_input', 'trg_label'.
-    """
+    """Bilingual dataset for Transformer with BPE support."""
 
     def __init__(self, source_sentences, target_sentences, src_vocab, tgt_vocab, max_len=100):
         assert len(source_sentences) == len(target_sentences), "Source and target must have same number of lines"
@@ -31,20 +28,25 @@ class TranslationDataset(Dataset):
         src_tokens = self.src_sentences[idx]
         tgt_tokens = self.tgt_sentences[idx]
 
+        # Encode tokens to IDs
+        # Note: Vocabulary.encode() now handles both word-level and BPE tokens
         src_ids = self.src_vocab.encode(src_tokens)
         tgt_ids = self.tgt_vocab.encode(tgt_tokens)
 
-        # Add special tokens for decoder: <sos> ... <eos>
-        sos_id = self.tgt_vocab.stoi.get("<sos>")
-        eos_id = self.tgt_vocab.stoi.get("<eos>")
+        # Get special token IDs
+        sos_id = self.tgt_vocab.sos_id
+        eos_id = self.tgt_vocab.eos_id
+        
         if sos_id is None or eos_id is None:
-            raise KeyError("Vocabulary must contain <sos> and <eos> tokens")
+            raise KeyError("Vocabulary must contain <sos> and <eos> tokens with IDs")
 
+        # Add special tokens for decoder: <sos> ... <eos>
         tgt_ids = [sos_id] + tgt_ids + [eos_id]
 
         # Padding / truncation to fixed max_len
-        src_ids = self.pad_sequence(src_ids, self.src_vocab.stoi["<pad>"])
-        tgt_ids = self.pad_sequence(tgt_ids, self.tgt_vocab.stoi["<pad>"])
+        pad_id = self.src_vocab.pad_id
+        src_ids = self.pad_sequence(src_ids, pad_id)
+        tgt_ids = self.pad_sequence(tgt_ids, pad_id)
 
         # Prepare decoder input and labels (shifted)
         trg_input = tgt_ids[:-1]

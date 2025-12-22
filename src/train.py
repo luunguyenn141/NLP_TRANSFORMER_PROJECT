@@ -110,23 +110,50 @@ class NoamOpt:
 
 # --- 3. Helpers ---
 def load_vocab():
+    """Load vocabulary (prefer BPE if available)"""
     print("⏳ Đang tải bộ từ điển...")
     src_vocab = Vocabulary()
     tgt_vocab = Vocabulary()
-    src_vocab.load(os.path.join(VOCAB_DIR, "src_vocab.json"))
-    tgt_vocab.load(os.path.join(VOCAB_DIR, "tgt_vocab.json"))
+    
+    # Try to load BPE vocab first
+    src_bpe_path = os.path.join(VOCAB_DIR, "src_vocab_bpe.json")
+    tgt_bpe_path = os.path.join(VOCAB_DIR, "tgt_vocab_bpe.json")
+    
+    if os.path.exists(src_bpe_path) and os.path.exists(tgt_bpe_path):
+        print("   Sử dụng BPE vocabularies")
+        src_vocab.load(src_bpe_path)
+        tgt_vocab.load(tgt_bpe_path)
+    else:
+        # Fallback to word-level
+        print("   Sử dụng word-level vocabularies")
+        src_vocab.load(os.path.join(VOCAB_DIR, "src_vocab.json"))
+        tgt_vocab.load(os.path.join(VOCAB_DIR, "tgt_vocab.json"))
+    
     return src_vocab, tgt_vocab
 
 
 def load_data(src_vocab, tgt_vocab, data_type):
+    """Load dataset for training/validation"""
     print(f"⏳ Đang tải dữ liệu: {data_type}...")
-    en_path = os.path.join(TOKENIZED_DIR, f"{data_type}.tok.en")
-    vi_path = os.path.join(TOKENIZED_DIR, f"{data_type}.tok.vi")
+    
+    # Try BPE files first
+    src_path = os.path.join(TOKENIZED_DIR, f"{data_type}.bpe.en")
+    tgt_path = os.path.join(TOKENIZED_DIR, f"{data_type}.bpe.vi")
+    
+    if os.path.exists(src_path) and os.path.exists(tgt_path):
+        print(f"   Sử dụng BPE tokenized files")
+    else:
+        # Fallback to word-level
+        src_path = os.path.join(TOKENIZED_DIR, f"{data_type}.tok.en")
+        tgt_path = os.path.join(TOKENIZED_DIR, f"{data_type}.tok.vi")
+        print(f"   Sử dụng word-level tokenized files")
 
-    with open(en_path, "r", encoding="utf-8") as f:
-        src_data = [line.split() for line in f]
-    with open(vi_path, "r", encoding="utf-8") as f:
-        tgt_data = [line.split() for line in f]
+    with open(src_path, "r", encoding="utf-8") as f:
+        src_data = [line.strip().split() for line in f]
+    with open(tgt_path, "r", encoding="utf-8") as f:
+        tgt_data = [line.strip().split() for line in f]
+
+    print(f"   Loaded {len(src_data)} sentence pairs")
 
     dataset = TranslationDataset(
         src_data,
@@ -134,7 +161,7 @@ def load_data(src_vocab, tgt_vocab, data_type):
         src_vocab,
         tgt_vocab,
         max_len=cfg.max_seq_len
-        )
+    )
 
     shuffle = True if data_type == "train" else False
     dataloader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=shuffle,
@@ -147,26 +174,10 @@ def train_epoch(model, iterator, optimizer, criterion, device):
     epoch_loss = 0
 
     for i, batch in enumerate(iterator):
-        if isinstance(batch, dict):
-            src = batch.get('src')
-            if 'trg_input' in batch and 'trg_label' in batch:
-                trg_input = batch['trg_input']
-                trg_label = batch['trg_label']
-                src = src.to(device)
-                trg_input = trg_input.to(device)
-                trg_label = trg_label.to(device)
-            else:
-                trg = batch.get('tgt') or batch.get('trg')
-                if trg is None:
-                    raise KeyError("Batch dict does not contain 'tgt' or 'trg_input'/'trg_label' keys")
-                src = src.to(device)
-                trg = trg.to(device)
-                trg_input = trg[:, :-1]
-                trg_label = trg[:, 1:]
-        else:
-            src, trg = batch[0].to(device), batch[1].to(device)
-            trg_input = trg[:, :-1]
-            trg_label = trg[:, 1:]
+        # Your batch already has src, trg_input, trg_label from collate_fn
+        src = batch['src'].to(device)
+        trg_input = batch['trg_input'].to(device)
+        trg_label = batch['trg_label'].to(device)
 
         optimizer.zero_grad()
 
@@ -184,9 +195,10 @@ def train_epoch(model, iterator, optimizer, criterion, device):
         epoch_loss += loss.item()
 
         if i % 100 == 0:
-            try:
-                current_lr = optimizer.optimizer.param_groups[0]['lr']
-            except Exception:
+            # Get learning rate from NoamOpt
+            if isinstance(optimizer, NoamOpt):
+                current_lr = optimizer._rate
+            else:
                 try:
                     current_lr = optimizer.param_groups[0]['lr']
                 except Exception:
@@ -201,27 +213,10 @@ def evaluate(model, iterator, criterion, device):
     epoch_loss = 0
 
     with torch.no_grad():
-        for i, batch in enumerate(iterator):
-            if isinstance(batch, dict):
-                src = batch.get('src')
-                if 'trg_input' in batch and 'trg_label' in batch:
-                    trg_input = batch['trg_input']
-                    trg_label = batch['trg_label']
-                    src = src.to(device)
-                    trg_input = trg_input.to(device)
-                    trg_label = trg_label.to(device)
-                else:
-                    trg = batch.get('tgt') or batch.get('trg')
-                    if trg is None:
-                        raise KeyError("Batch dict does not contain 'tgt' or 'trg_input'/'trg_label' keys")
-                    src = src.to(device)
-                    trg = trg.to(device)
-                    trg_input = trg[:, :-1]
-                    trg_label = trg[:, 1:]
-            else:
-                src, trg = batch[0].to(device), batch[1].to(device)
-                trg_input = trg[:, :-1]
-                trg_label = trg[:, 1:]
+        for batch in iterator:
+            src = batch['src'].to(device)
+            trg_input = batch['trg_input'].to(device)
+            trg_label = batch['trg_label'].to(device)
 
             output = model(src, trg_input)
             output_dim = output.shape[-1]
@@ -263,13 +258,12 @@ def main():
     ).to(device)
 
     base_optimizer = optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9)
-    model_opt = NoamOpt(base_optimizer, cfg.d_model, warmup_steps=2000, factor=2)
+    optimizer = NoamOpt(base_optimizer, cfg.d_model, warmup_steps=2000, factor=2)
 
     criterion = nn.CrossEntropyLoss(ignore_index=trg_pad_idx, label_smoothing=0.1)
 
     # --- Cấu hình Early Stopping ---
     best_model_path = os.path.join(CHECKPOINT_DIR, 'best_model.pth')
-    # patience=3: Dừng nếu sau 3 epoch validation loss không giảm
     early_stopping = EarlyStopping(patience=3, verbose=True, path=best_model_path)
     
     # Kiểm tra checkpoint cũ
@@ -296,14 +290,14 @@ def main():
     for epoch in range(cfg.num_epochs):
         start_time = time.time()
 
-        train_loss = train_epoch(model, train_loader, model_opt, criterion, device)
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
         valid_loss = evaluate(model, valid_loader, criterion, device)
         
         # Tính Perplexity (PPL) = exp(loss)
         train_ppl = math.exp(train_loss)
         valid_ppl = math.exp(valid_loss)
 
-        # --- LƯU HISTORY ---
+        # LƯU HISTORY
         train_losses.append(train_loss)
         valid_losses.append(valid_loss)
         train_ppls.append(train_ppl)
@@ -316,8 +310,7 @@ def main():
         print(f'\tTrain Loss: {train_loss:.3f} | Train PPL: {train_ppl:7.3f}')
         print(f'\t Val. Loss: {valid_loss:.3f} |  Val. PPL: {valid_ppl:7.3f}')
 
-        # --- GỌI EARLY STOPPING ---
-        # EarlyStopping sẽ tự động lưu model nếu validation loss giảm
+        # GỌI EARLY STOPPING
         early_stopping(valid_loss, model)
         
         if early_stopping.early_stop:
@@ -327,7 +320,7 @@ def main():
         # Lưu checkpoint cuối cùng (đề phòng)
         torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'last_model.pth'))
 
-    # --- VẼ BIỂU ĐỒ (LOSS & PPL) ---
+    # VẼ BIỂU ĐỒ (LOSS & PPL)
     print("Đang vẽ biểu đồ huấn luyện...")
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
 
@@ -350,7 +343,7 @@ def main():
     ax2.grid(True)
 
     plt.tight_layout()
-    # Lưu biểu đồ thành file ảnh thay vì chỉ show (tiện xem lại)
+    # Lưu biểu đồ thành file ảnh thay vì chỉ show
     plt.savefig(os.path.join(CHECKPOINT_DIR, 'training_metrics.png'))
     plt.show()
     print(f"Đã lưu biểu đồ tại: {os.path.join(CHECKPOINT_DIR, 'training_metrics.png')}")
