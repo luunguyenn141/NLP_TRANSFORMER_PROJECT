@@ -47,13 +47,9 @@ class MultiHeadAttention(nn.Module):
         # Chia cho căn bậc 2 của d_head để ổn định gradient
         scores = scores / math.sqrt(self.d_head)
 
-        # --- BƯỚC 3: ÁP DỤNG MASK (QUAN TRỌNG) ---
+        # --- BƯỚC 3: ÁP DỤNG MASK ---
         # Nếu có mask, ta gán giá trị tại vị trí mask=0 thành âm vô cùng (-1e9)
-        # Để khi qua Softmax nó sẽ bằng 0 (nghĩa là không thèm nhìn vào từ đó)
         if mask is not None:
-            # Use a dtype-appropriate large negative value for masked positions.
-            # For float32/64 a large negative like -1e9 is fine; for float16
-            # that can overflow or be too large, so use a smaller magnitude.
             if scores.dtype == torch.float16:
                 fill = torch.tensor(-1e4, device=scores.device, dtype=scores.dtype)
             else:
@@ -67,13 +63,9 @@ class MultiHeadAttention(nn.Module):
         output = torch.matmul(attn_weights, V)
 
         # --- BƯỚC 5: GHÉP CÁC HEAD LẠI (CONCAT) ---
-        # Đảo lại vị trí dimensions: (batch_size, seq_len, n_head, d_head)
-        # Sau đó ép phẳng (flatten) 2 chiều cuối lại thành d_model
         output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
-
-        # --- BƯỚC 6: QUA LỚP LINEAR CUỐI ---
-        # Trả về cả output và attention weights để các lớp Encoder/Decoder
-        # có thể (tuỳ chọn) truy cập attention maps.
+        
+        # Kích thước cuối cùng: (batch_size, seq_len, d_model)
         return self.w_o(output), attn_weights
 
 # ==========================================

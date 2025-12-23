@@ -16,15 +16,18 @@ from src.data.data_processing.vocabulary import Vocabulary
 from src.data.data_processing.tokenizer import BPETokenizer
 from src.beam_search import beam_search_decode
 
+temp_dir = os.path.dirname(project_root)
+
 # --- CẤU HÌNH ---
 VOCAB_DIR = os.path.join(project_root, "src/data/vocab")
 PROCESSED_DIR = os.path.join(project_root, "src/data/processed") 
-CHECKPOINT_PATH = os.path.join(project_root, "checkpoints/best_model.pth")
+CHECKPOINT_PATH = os.path.join(temp_dir, "checkpoints/best_model.pth")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 TEST_SET = "tst2013" 
 
 def load_resources():
     print("⏳ Đang tải tài nguyên...")
+    print(f" - Vocab từ: {VOCAB_DIR}")
     # 1. Load Vocab
     src_vocab = Vocabulary()
     tgt_vocab = Vocabulary()
@@ -52,8 +55,8 @@ def load_test_sentences(data_type):
     print(f"⏳ Đang tải dữ liệu test gốc: {data_type}...")
     
     # Đường dẫn file đã clean (chưa tokenized BPE)
-    src_path = os.path.join(PROCESSED_DIR, f"{data_type}.clean.en") # Source là tiếng Việt
-    tgt_path = os.path.join(PROCESSED_DIR, f"{data_type}.clean.vi") # Target là tiếng Anh
+    src_path = os.path.join(PROCESSED_DIR, f"{data_type}.clean.en") 
+    tgt_path = os.path.join(PROCESSED_DIR, f"{data_type}.clean.vi") 
     
     with open(src_path, "r", encoding="utf-8") as f:
         src_sentences = [line.strip() for line in f]
@@ -114,7 +117,7 @@ def main():
         print(f"Loading checkpoint: {CHECKPOINT_PATH}")
         model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE), strict=False)
     else:
-        print("❌ Không tìm thấy model checkpoint!")
+        print("Không tìm thấy model checkpoint!")
         return
 
     # 4. Load Data
@@ -123,7 +126,7 @@ def main():
     hypotheses = [] # Chứa các câu máy dịch
     references = [] # Chứa các câu đáp án gốc
     
-    print(f"🚀 Bắt đầu đánh giá trên {len(src_sentences)} câu...")
+    print(f"Bắt đầu đánh giá trên {len(src_sentences)} câu...")
     
     for src, tgt in tqdm(zip(src_sentences, tgt_sentences), total=len(src_sentences)):
         # Máy dịch
@@ -139,13 +142,55 @@ def main():
     print(f"SacreBLEU Score: {bleu.score:.2f}")
     print("="*40)
     
-    # Some example outputs
-    print("\nVí dụ:")
-    for i in range(min(3, len(hypotheses))):
-        print(f"Src: {src_sentences[i]}")
-        print(f"Ref: {references[i]}")
-        print(f"Hyp: {hypotheses[i]}")
-        print("-" * 20)
+    scored_sentences = []
+    # Tính điểm BLEU cho từng câu để phân tích
+    for i, (src, ref, hyp) in enumerate(zip(src_sentences, references, hypotheses)):
+        # Tính Sentence BLEU
+        score = sacrebleu.sentence_bleu(hyp, [ref], tokenize='none', use_effective_order=True).score
+        scored_sentences.append({
+            "id": i,
+            "score": score,
+            "src": src,
+            "ref": ref,
+            "hyp": hyp
+        })
+
+    # Sắp xếp theo điểm số tăng dần
+    scored_sentences.sort(key=lambda x: x["score"])
+    
+    total = len(scored_sentences)
+    if total < 5:
+        print("Không đủ dữ liệu để chia 5 mức độ.")
+        indices = range(total)
+    else:
+
+        indices = [
+            0,                  # Mức 1: Tệ nhất (Min)
+            int(total * 0.25),  # Mức 2: Kém (25%)
+            int(total * 0.5),   # Mức 3: Trung bình (Median - 50%)
+            int(total * 0.75),  # Mức 4: Khá (75%)
+            total - 1           # Mức 5: Tốt nhất (Max)
+        ]
+    
+    labels = [
+        "MỨC 1: TỆ NHẤT (Worst Case)", 
+        "MỨC 2: KÉM (Lower Quartile)", 
+        "MỨC 3: TRUNG BÌNH (Median)", 
+        "MỨC 4: KHÁ (Upper Quartile)", 
+        "MỨC 5: XUẤT SẮC (Best Case)"
+    ]
+
+    print("\n" + "="*60)
+    print("PHÂN TÍCH 5 MỨC ĐỘ DỊCH THUẬT (DỰA TRÊN SENTENCE BLEU)")
+    print("="*60)
+
+    for label, idx in zip(labels, indices):
+        item = scored_sentences[idx]
+        print(f"\n{label} [ID: {item['id']} | BLEU: {item['score']:.2f}]")
+        print(f"Src: {item['src']}")
+        print(f"Ref: {item['ref']}")
+        print(f"Hyp: {item['hyp']}")
+        print("-" * 30)
 
 if __name__ == "__main__":
     main()

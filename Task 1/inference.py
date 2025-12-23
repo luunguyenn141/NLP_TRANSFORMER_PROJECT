@@ -16,12 +16,12 @@ from src.data.data_processing.tokenizer import BPETokenizer
 
 # --- 2. CẤU HÌNH ---
 # Lưu ý: Cấu trúc thư mục phải khớp với lúc train
-VOCAB_DIR = os.path.join(project_root,"NLP_TRANSFORMER_PROJECT", "src", "data", "vocab")
-CHECKPOINT_PATH = os.path.join(project_root,"NLP_TRANSFORMER_PROJECT", "checkpoints", "best_model.pth")
+VOCAB_DIR = os.path.join(script_dir, "src", "data", "vocab")
+CHECKPOINT_PATH = os.path.join(project_root, "checkpoints", "best_model.pth")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # --- 3. HÀM BEAM SEARCH ---
-def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, device, beam_width=3):
+def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, device, beam_width=3, no_repeat_ngram_size=3):
     model.eval()
     with torch.no_grad():
         enc_src = model.encoder(src, src_mask)
@@ -65,9 +65,9 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
     # Trả về chuỗi có điểm cao nhất
     return beam[0][1]
 
-# --- 4. HÀM LOAD TÀI NGUYÊN (QUAN TRỌNG) ---
+# --- 4. HÀM LOAD TÀI NGUYÊN ---
 def load_resources():
-    print(f"⏳ Đang tải tài nguyên từ: {VOCAB_DIR}")
+    print(f"Đang tải tài nguyên từ: {VOCAB_DIR}")
     
     # --- A. Load Vocab (Mapping ID <-> Token) ---
     src_vocab = Vocabulary()
@@ -85,10 +85,9 @@ def load_resources():
     # Fix lỗi <unk> nếu file json bị lỗi
     if "<unk>" not in src_vocab.stoi:
         src_vocab.stoi["<unk>"] = 1 # Giả định index 1, hoặc len(stoi)
-        print("⚠️ Cảnh báo: Đã tự động vá lỗi thiếu <unk> trong src_vocab")
+        print("Cảnh báo: Đã tự động vá lỗi thiếu <unk> trong src_vocab")
 
     # --- B. Load Tokenizer (BPE Model) ---
-    # Cần 2 tokenizer riêng cho Source (Vi) và Target (En)
     src_tokenizer = BPETokenizer(vocab_size=cfg.vocab_size)
     tgt_tokenizer = BPETokenizer(vocab_size=cfg.vocab_size)
     
@@ -120,18 +119,18 @@ def load_resources():
     ).to(DEVICE)
     
     if os.path.exists(CHECKPOINT_PATH):
-        print(f"⏳ Đang load checkpoint: {CHECKPOINT_PATH}")
+        print(f"Đang load checkpoint: {CHECKPOINT_PATH}")
         ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
         
         # Load state_dict với strict=False để tránh lỗi nhỏ không tương thích
         try:
             model.load_state_dict(ckpt)
-            print("✅ Load model thành công!")
+            print("Load model thành công!")
         except Exception as e:
-            print(f"⚠️ Load model có cảnh báo (có thể do sai lệch kích thước vocab): {e}")
+            print(f"Load model có cảnh báo (có thể do sai lệch kích thước vocab): {e}")
             model.load_state_dict(ckpt, strict=False)
     else:
-        print("❌ KHÔNG TÌM THẤY CHECKPOINT! Model sẽ dịch ngẫu nhiên.")
+        print("KHÔNG TÌM THẤY CHECKPOINT! Model sẽ dịch ngẫu nhiên.")
     
     return model, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer
 
@@ -172,13 +171,6 @@ def translate_sentence(sentence, model, src_vocab, tgt_vocab, src_tokenizer, tgt
     # Loại bỏ SOS và EOS trước khi decode
     pred_ids_clean = [idx for idx in pred_ids if idx not in [sos_idx, eos_idx]]
     
-    # Cách 1: Map ID -> Token String -> Detokenize (Dùng hàm detokenize cũ)
-    # pred_tokens = [tgt_vocab.to_token(idx) for idx in pred_ids_clean]
-    # translated_text = tgt_tokenizer.detokenize(pred_tokens)
-
-    # Cách 2 (Khuyên dùng với BPE): Dùng hàm decode trực tiếp của thư viện
-    # Tuy nhiên, do cấu trúc project đang tách rời Vocab và Tokenizer, ta dùng cách 1 cho an toàn
-    # Hoặc nếu bạn đã update detokenize như tôi hướng dẫn trước đó:
     pred_tokens = [tgt_vocab.to_token(idx) for idx in pred_ids_clean]
     translated_text = tgt_tokenizer.detokenize(pred_tokens)
     
@@ -189,11 +181,11 @@ def main():
     try:
         model, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer = load_resources()
     except Exception as e:
-        print(f"❌ Lỗi khởi tạo: {e}")
+        print(f"Lỗi khởi tạo: {e}")
         return
 
     print("\n" + "="*50)
-    print(f"🌏 DEMO DỊCH MÁY: {cfg.src_lang.upper()} -> {cfg.tgt_lang.upper()}")
+    print(f"DEMO DỊCH MÁY: {cfg.src_lang.upper()} -> {cfg.tgt_lang.upper()}")
     print("Nhập 'q' để thoát.")
     print("="*50 + "\n")
     
@@ -217,7 +209,7 @@ def main():
         except KeyboardInterrupt:
             break
         except Exception as e:
-            print(f"❌ Lỗi khi dịch: {e}")
+            print(f"Lỗi khi dịch: {e}")
 
 if __name__ == "__main__":
     main()

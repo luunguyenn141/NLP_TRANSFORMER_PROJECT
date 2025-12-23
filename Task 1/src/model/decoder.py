@@ -23,7 +23,6 @@ class DecoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, trg, enc_src, trg_mask, src_mask):
-        # --- PRE-NORM CHANGE ---
 
         # 1. Masked Self Attention
         trg_norm = self.self_attn_norm(trg) # Norm trước

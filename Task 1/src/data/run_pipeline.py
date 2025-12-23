@@ -15,12 +15,10 @@ from data_processing.statistics import DataStatistics
 from data_processing.dataloader import create_dataloader
 from configs.config import cfg
 
-
-RAW_DIR = "src/data/raw"
-PROCESSED_DIR = "src/data/processed"
-TOKENIZED_DIR = "src/data/processed/tokenized"
-VOCAB_DIR = "src/data/vocab"
-
+RAW_DIR = os.path.join(project_root, "src/data/raw")
+PROCESSED_DIR = os.path.join(project_root, "src/data/processed")
+TOKENIZED_DIR = os.path.join(project_root, "src/data/processed/tokenized")
+VOCAB_DIR = os.path.join(project_root, "src/data/vocab")
 
 def ensure_dirs():
     for d in [PROCESSED_DIR, TOKENIZED_DIR, VOCAB_DIR]:

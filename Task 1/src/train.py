@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader
 
 import matplotlib.pyplot as plt
 
-# Ensure project root is on `sys.path` so imports like `configs` and `src` resolve
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
 if project_root not in sys.path:
@@ -21,10 +20,10 @@ from src.model.transformer import Transformer
 from src.data.data_processing.dataset import TranslationDataset
 from src.data.data_processing.vocabulary import Vocabulary
 
-# --- CẤU HÌNH ĐƯỜNG DẪN (Khớp với run_pipeline.py) ---
-TOKENIZED_DIR = "src/data/processed/tokenized"
-VOCAB_DIR = "src/data/vocab"
-CHECKPOINT_DIR = "checkpoints"
+# --- CẤU HÌNH ĐƯỜNG DẪN  ---
+TOKENIZED_DIR = os.path.join(project_root, "src/data/processed/tokenized")
+VOCAB_DIR = os.path.join(project_root, "src/data/vocab")
+CHECKPOINT_DIR = os.path.join(project_root, "checkpoints")
 
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -236,12 +235,12 @@ def evaluate(model, iterator, criterion, device):
 # --- 4. MAIN ---
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Bắt đầu huấn luyện trên thiết bị: {device}")
+    print(f"Bắt đầu huấn luyện trên thiết bị: {device}")
 
     src_vocab, tgt_vocab = load_vocab()
     src_vocab_size = len(src_vocab)
     tgt_vocab_size = len(tgt_vocab)
-    print(f"✅ Vocab size: Source={src_vocab_size}, Target={tgt_vocab_size}")
+    print(f"Vocab size: Source={src_vocab_size}, Target={tgt_vocab_size}")
 
     src_pad_idx = src_vocab.to_index('<pad>')
     trg_pad_idx = tgt_vocab.to_index('<pad>')
@@ -321,7 +320,7 @@ def main():
         early_stopping(valid_loss, model)
         
         if early_stopping.early_stop:
-            print("⛔ Early stopping triggered! Dừng huấn luyện do validation loss không giảm sau 3 epochs.")
+            print("Early stopping triggered! Dừng huấn luyện do validation loss không giảm sau 3 epochs.")
             break
 
         # Lưu checkpoint cuối cùng (đề phòng)

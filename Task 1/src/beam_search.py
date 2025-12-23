@@ -39,9 +39,8 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
             with torch.no_grad():
                 output = model.decoder(trg_tensor, enc_src, trg_mask, src_mask)
                 prob = output[:, -1, :] 
-                log_prob = torch.log_softmax(prob, dim=-1) # [1, vocab_size]
+                log_prob = torch.log_softmax(prob, dim=-1) 
             
-            # --- [QUAN TRỌNG] LOGIC CHẶN LẶP TỪ ---
             # Nếu cụm từ sắp sinh ra đã từng xuất hiện trong quá khứ của câu này -> Gán điểm âm vô cùng
             if no_repeat_ngram_size > 0:
                 banned_tokens = _get_banned_tokens(seq, no_repeat_ngram_size)
@@ -57,9 +56,7 @@ def beam_search_decode(model, src, src_mask, max_len, start_symbol, end_symbol, 
                 sym = topk_indices[0][i].item()
                 added_score = topk_log_probs[0][i].item()
                 
-                # Length Penalty nhẹ (tùy chọn): Chia điểm cho độ dài để không thiên vị câu quá ngắn
-                # new_score = (score + added_score) # Có thể để đơn giản như cũ
-                
+                # Tạo nhánh mới và thêm vào candidates
                 candidates.append((score + added_score, seq + [sym]))
         
         # 4. Chọn lọc lại Top-K nhánh tốt nhất từ tất cả candidates
@@ -82,17 +79,14 @@ def _get_banned_tokens(generated_seq, n):
         return set()
     
     banned_tokens = set()
-    # Lấy (n-1) từ cuối cùng làm "đuôi" để soi lại quá khứ
+
     ngram_prefix = tuple(generated_seq[-(n-1):])
     
-    # Quét qua toàn bộ chuỗi đã sinh để xem cái "đuôi" này từng xuất hiện ở đâu
     for i in range(len(generated_seq) - n + 1):
         # Lấy thử cụm n từ cũ
         previous_ngram = tuple(generated_seq[i : i+n])
         
-        # Nếu phần đầu của cụm cũ trùng với prefix hiện tại
         if previous_ngram[:-1] == ngram_prefix:
-            # Thì từ cuối cùng của cụm cũ chính là từ CẤM
             banned_tokens.add(previous_ngram[-1])
             
     return banned_tokens

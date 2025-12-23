@@ -23,7 +23,6 @@ class EncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
     def forward(self, src, src_mask):
-        # --- PRE-NORM CHANGE ---
         
         # 1. Self Attention Block
         # B1: Norm trước
